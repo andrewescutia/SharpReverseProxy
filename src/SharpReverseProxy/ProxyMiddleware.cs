@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -15,14 +16,15 @@ namespace SharpReverseProxy {
             _next = next;
             _options = options.Value;
             _httpClient = new HttpClient(_options.BackChannelMessageHandler ?? new HttpClientHandler {
-                AllowAutoRedirect = _options.FollowRedirects
+                AllowAutoRedirect = _options.FollowRedirects,
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
             });
         }
 
         public async Task Invoke(HttpContext context) {
             var uri = GeRequestUri(context);
             var resultBuilder = new ProxyResultBuilder(uri);
-
+            
             var matchedRule = _options.ProxyRules.FirstOrDefault(r => r.Matcher.Invoke(uri));
             if (matchedRule == null) {
                 await _next(context);
@@ -41,18 +43,28 @@ namespace SharpReverseProxy {
             SetProxyRequestHeaders(proxyRequest, context);
 
             matchedRule.Modifier.Invoke(proxyRequest, context.User);
+
             proxyRequest.Headers.Host = proxyRequest.RequestUri.Host;
 
+            if (proxyRequest.Content != null)
+            {
+                await proxyRequest.Content.LoadIntoBufferAsync();
+            }
+
+            await resultBuilder.HttpRequest(proxyRequest);
+            
             try {
-                await ProxyTheRequest(context, proxyRequest, matchedRule);
+                await ProxyTheRequest(context, proxyRequest, matchedRule, resultBuilder);
             }
             catch (HttpRequestException) {
                 context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             }
+
             _options.Reporter.Invoke(resultBuilder.Proxied(proxyRequest.RequestUri, context.Response.StatusCode));
         }
 
-        private async Task ProxyTheRequest(HttpContext context, HttpRequestMessage proxyRequest, ProxyRule proxyRule) {
+        private async Task ProxyTheRequest(HttpContext context, HttpRequestMessage proxyRequest, ProxyRule proxyRule, ProxyResultBuilder resultBuilder) {
+
             using (var responseMessage = await _httpClient.SendAsync(proxyRequest,
                                                                      HttpCompletionOption.ResponseHeadersRead,
                                                                      context.RequestAborted)) {
@@ -71,13 +83,17 @@ namespace SharpReverseProxy {
                         foreach (var contentHeader in responseMessage.Content.Headers) {
                             context.Response.Headers[contentHeader.Key] = contentHeader.Value.ToArray();
                         }
+                        await responseMessage.Content.LoadIntoBufferAsync();
                         await responseMessage.Content.CopyToAsync(context.Response.Body);
                     }
                 }
                 
-                if (proxyRule.ResponseModifier != null) {
+                if (proxyRule.ResponseModifier != null)
+                {
                     await proxyRule.ResponseModifier.Invoke(responseMessage, context);
                 }
+
+                await resultBuilder.HttpResponse(responseMessage);
             }
         }
 
