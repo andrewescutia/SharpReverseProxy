@@ -105,9 +105,10 @@ namespace SharpReverseProxy {
 
         private static void SetProxyRequestBody(HttpRequestMessage requestMessage, HttpContext context) {
             var requestMethod = context.Request.Method;
+
+            //previously had DELETE as a part of this but we were actually passing up body content as part of our delete wallet calls :-|
             if (HttpMethods.IsGet(requestMethod) ||
                 HttpMethods.IsHead(requestMethod) ||
-                HttpMethods.IsDelete(requestMethod) ||
                 HttpMethods.IsTrace(requestMethod)) {
                 return;
             }
