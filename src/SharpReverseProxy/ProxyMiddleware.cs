@@ -83,8 +83,13 @@ namespace SharpReverseProxy {
                         foreach (var contentHeader in responseMessage.Content.Headers) {
                             context.Response.Headers[contentHeader.Key] = contentHeader.Value.ToArray();
                         }
-                        await responseMessage.Content.LoadIntoBufferAsync();
-                        await responseMessage.Content.CopyToAsync(context.Response.Body);
+
+                        //this was throwing an exception attempting to add body on a 204 response. is there another way to check?
+                        if (responseMessage.StatusCode != HttpStatusCode.NoContent)
+                        {
+                            await responseMessage.Content.LoadIntoBufferAsync();
+                            await responseMessage.Content.CopyToAsync(context.Response.Body);
+                        }
                     }
                 }
                 
